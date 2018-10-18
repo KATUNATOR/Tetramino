@@ -1,0 +1,1184 @@
+unit UnitGame;
+
+interface
+
+uses
+  Windows, Messages, SysUtils, Variants, Classes, Graphics, Controls, Forms,
+  Dialogs, Grids, StdCtrls, Menus, Buttons, XPMan;
+
+type
+  TFormGame = class(TForm)
+    sg: TStringGrid;       //таблица для игры
+    sgIn: TStringGrid;     //таблица для задавания букв
+    mmBase: TMainMenu;     //меню
+    NGame: TMenuItem;      //меню-Игра
+    mniNewGame: TMenuItem; //меню-Игра-Новая Игра
+    mniAutoRes: TMenuItem; //меню-Игра-Авторешение
+    mniReset: TMenuItem;   //меню-Игра-Заново
+    mniBack: TMenuItem;    //меню-Игра-Назад в меню
+    NSettings: TMenuItem;  //меню-Настройки
+    mniSize: TMenuItem;    //меню-Настройки-Размер
+    mniLetters: TMenuItem; //меню-Настройки-Буквы
+    NHepl: TMenuItem;      //меню-Справка
+    btnOkSize: TBitBtn;    //кнопка подтверждения Размеров
+    btnOkLetter: TBitBtn;  //кнопка подтверждения Букв
+    edtN: TEdit;           //ввод количества строчек (N)
+    edtM: TEdit;           //ввод количества столбцов (M)
+    lblN: TLabel;          //надпись количества строчек (N)
+    lblM: TLabel;          //надпись количества столбцов (M)
+    xpmnfst1: TXPManifest; //компонент для современного интерфейса
+    procedure sgDrawCell(Sender: TObject; ACol, ARow: Integer; Rect: TRect;
+      State: TGridDrawState);
+    procedure sgClick(Sender: TObject);
+    procedure FormCreate(Sender: TObject);
+    procedure mniNewGameClick(Sender: TObject);
+    procedure mniResetClick(Sender: TObject);
+    procedure mniAutoResClick(Sender: TObject);
+    procedure mniSizeClick(Sender: TObject);
+    procedure mniLettersClick(Sender: TObject);
+    procedure sgInKeyPress(Sender: TObject; var Key: Char);
+    procedure sgInSetEditText(Sender: TObject; ACol, ARow: Integer;
+      const Value: String);
+    procedure btnOkLetterClick(Sender: TObject);
+    procedure btnOkSizeClick(Sender: TObject);
+    procedure mniBackClick(Sender: TObject);
+    procedure NHeplClick(Sender: TObject);
+
+  private
+    { Private declarations }
+  public
+
+    { Public declarations }
+  end;
+
+var
+  FormGame: TFormGame;
+
+implementation
+
+uses UnitStart, UnitHelp;
+
+{$R *.dfm}
+
+type
+  // массив для генерации перестановок (подбор фигуры)
+  TPer = array[0..18] of byte;
+
+  // данные для одной фигуры
+  // первые 6 координат описывают 3 клеточки относительно одной главной
+  TF=record
+    i1:   Integer;
+    j1:   Integer;
+    i2:   Integer;
+    j2:   Integer;
+    i3:   Integer;
+    j3:   Integer;
+    jmin: Integer; // самая левая клеточка
+    jmax: Integer; // самая правая клеточка
+    imax: Integer; // самая низкая клеточка
+    t:    Integer; // тип фигуры (от 1 до 5)
+  end;
+
+  // массив для данных о всех 19-ти фигур
+  TFig=array[0..18] of TF;
+
+  // данные о вставленной фигуре
+  TMatFig=record
+    k: Byte; // сама фигура (от 1 до 19)
+    l: Byte; // буква, принадлежащая этой фигуре (от 1 до 5)
+    i: Byte; // (координата i для главной клеточки)
+    j: Byte; // (координата j для главной клеточки)
+  end;
+
+  // данные о всех типах фигур и буквах
+  TLetType=record
+    inf: Byte;      // есть ли буква/тип
+    count: Integer; // сколько фигур было вписано
+  end;
+
+  // массив
+  TMas=array of array of integer;
+
+  // данные об Игровой матрице (поле)
+  TMat=record
+    af: TMas; // матрица с фигурами
+    al: TMas; // матрица с буквами
+    f: array of TMatFig; // массив с вставленными фигурами
+    l: array[0..4] of TLetType; // массив с типами фигур для букв
+    t: array[0..4] of TLetType; // массив с буквами для типов фигур
+    fcount: Integer; // сколько фигур вставили
+  end;
+
+  // данные о кликах по полю
+  TClick=record
+    a: TMas; // матрица с отмеченными клеточками, где был клик
+    i:array[0..3] of Integer; // координаты i для каждого клика
+    j:array[0..3] of Integer; // координаты j для каждого клика
+    count:           Integer; // сколько кликов было
+  end;
+
+var
+  now,res:  TMat;         // Игровое поле, поле для задачи условия
+  cl:       TClick;       // клики по полю
+  fig:      TFig;         // все фигуры от 1 до 19
+  n:        Integer = 6;  // кол-во строчек
+  m:        Integer = 6;  // кол-во столбцов
+  rcount:   Integer;      // кол-во найденных результатов
+  lcount:   Integer;      // кол-во букв на поле
+  rnow:     Integer;      // текущий результат для отображения
+  fLet:     Boolean;      // флаг проверки букв при авторешении
+  fStop:    Boolean;      // флаг для выхода из рекурсии авторешения
+
+//------------------------------------------------------------------------------
+//  Все фигуры (от 1 до 19) по типам (от 1 до 5)
+//------------------------------------------------------------------------------
+
+{
+//---1
+
+1
+
+   11
+   11
+
+//---2
+
+2
+
+   2222
+
+3
+
+   2
+   2
+   2
+   2
+
+//---3
+
+4
+
+   33
+    33
+
+5
+
+    33
+   33
+
+6
+
+    3
+   33
+   3
+
+7
+
+   3
+   33
+    3
+
+//---4
+
+8
+
+    4
+   444
+
+9
+
+   4
+   44
+   4
+
+10
+
+   444
+    4
+
+11
+
+    4
+   44
+    4
+
+//---5
+
+12
+
+     5
+   555
+
+13
+
+   55
+    5
+    5
+
+14
+
+   555
+   5
+
+15
+
+   5
+   5
+   55
+
+16
+
+   5
+   555
+
+17
+
+   55
+   5
+   5
+
+18
+
+   555
+     5
+
+19
+
+    5
+    5
+   55
+}
+
+//------------------------------------------------------------------------------
+// ИНИЦИАЛИЗАЦИЯ ВСЕХ ФИГУР (ОТ 1 ДО 19)
+//------------------------------------------------------------------------------
+procedure IniFig(var fig:TFig);
+//считываем из подготовленного типизированного файла
+var
+  f:file of TF;
+  i,j:Integer;
+begin
+  Assign(f,'data\figs.dat');
+  Reset(f);
+  for i:=0 to 18 do
+    read(f,fig[i]);
+  Close(f);
+end;
+
+//------------------------------------------------------------------------------
+// ИНИЦИАЛИЗАЦИЯ КЛИКОВ
+//------------------------------------------------------------------------------
+procedure IniClick(var cl:TClick);
+var
+  x:byte;
+begin
+  SetLength(cl.a,n,m);
+  cl.count:=0;
+  for x:=0 to 3 do
+  begin
+    //очистка клика на матрице
+    cl.a[cl.i[x],cl.j[x]]:=0;
+    //отображение изменений на форме
+    FormGame.sg.Cells[cl.j[x],cl.i[x]]:=FormGame.sg.Cells[cl.j[x],cl.i[x]];
+    //обнуление координат
+    cl.i[x]:=0;
+    cl.j[x]:=0;
+  end;
+end;
+
+//------------------------------------------------------------------------------
+// ГЕНЕРАТОР НОВОЙ ПЕРЕСТАНОВКИ (ОТ 0 ДО 18)
+//------------------------------------------------------------------------------
+procedure IniPer(var mas:TPer);
+var
+  i,j,num:Byte;
+begin
+  //массив с последовательностью от 0 до 18
+  for i:=0 to 18 do
+    mas[i]:=i;
+
+  //меняем местами рандомные ячейки 19 раз
+  for i:=0 to 18 do
+  begin
+    Randomize;
+    j:=Random(19);
+    num:=mas[i];
+    mas[i]:=mas[j];
+    mas[j]:=num;
+  end;
+end;
+
+//------------------------------------------------------------------------------
+// ИНИЦИАЛИЗАЦИЯ МАТРИЦЫ ПОЛЯ
+//------------------------------------------------------------------------------
+procedure IniMat(var mat:TMat; n,m:byte);
+var
+  i,j:integer;
+begin
+
+//подстраивание размеров поля под размер поля
+
+  FormGame.sg.ColCount:=m;
+  FormGame.sg.RowCount:=n;
+
+  FormGame.sg.Width:=m*(formgame.sg.DefaultColWidth+1)+5;
+  FormGame.sg.Height:=n*(formgame.sg.DefaultRowHeight+2)+5;
+
+  formgame.Width:=FormGame.sg.Left+FormGame.sg.Width+15;
+  FormGame.Height:=FormGame.sg.Top+FormGame.sg.Height+55;
+  if FormGame.Width<200 then FormGame.Width:=200;
+
+//обнуление парметров матрицы поля (фигуры)
+
+  SetLength(mat.af,n,m);
+  for i:=0 to n-1 do
+    for j:=0 to m-1 do
+    begin
+      mat.af[i,j]:=0;
+      //отображение изменений на форме
+      FormGame.sg.Cells[j,i]:=FormGame.sg.Cells[j,i];
+    end;
+
+  for i:=0 to 4 do
+  begin
+    mat.l[i].inf:=0;
+    mat.l[i].count:=0;
+    mat.t[i].inf:=0;
+    mat.t[i].count:=0;
+  end;
+
+  SetLength(mat.f,0);
+  mat.fcount:=0;
+end;
+
+//------------------------------------------------------------------------------
+// ИНИЦИАЛИЗАЦИЯ РАНДОМНОГО УСЛОВИЯ
+//------------------------------------------------------------------------------
+procedure IniRandom(var mat:TMat; n,m:byte);
+//по готовому полю (res) со вставленными фигурами рандомно распределяем буквы
+var
+  i,j,r,lc,t:Integer;
+  let:array [0..4] of Byte;
+  fin: Text;
+  f:file of TMatFig;
+  fg:TMatFig;
+begin
+
+//обнуление парметров матрицы поля (буквы)
+
+  setlength(mat.al,n,m);
+  for i:=0 to n-1 do
+    for j:=0 to m-1 do
+    begin
+      mat.al[i,j]:=0;
+    end;
+
+  for i:=0 to 4 do
+    let[i]:=0;
+
+  //кол-во раставленных букв
+  lc:=0;
+
+  //открываем подготовленное авторешением поле (res)
+  AssignFile(f,'data\input.dat');
+  Reset(f);
+
+  //поочередно читам каждую вставленную фигуру в поле
+  while not Eof(f) do
+  begin
+    read(f,fg);
+
+    t:=fig[fg.k-1].t;
+    i:=fg.i;
+    j:=fg.j;
+    //параметра l нет, т.к. авторешение сгенерировало раскладку фигур без букв
+
+    //если для этого типа фигур еще не присвоено буквы, то присваиваем
+    if let[t-1]=0 then
+    begin
+      Inc(lc);
+      let[t-1]:=lc;
+    end;
+
+    //генерация рандомного расположения буквы на одной из 4 клеточек фигуры
+    r:=Random(4);
+    case r of
+      1:  begin i:=i+fig[fg.k-1].i1; j:=j+fig[fg.k-1].j1; end;
+      2:  begin i:=i+fig[fg.k-1].i2; j:=j+fig[fg.k-1].j2; end;
+      3:  begin i:=i+fig[fg.k-1].i3; j:=j+fig[fg.k-1].j3; end;
+    end;
+
+    //заполнение матрицы букв
+    mat.al[i,j]:=let[t-1];
+  end;       
+
+  //закрываем файл
+  Close(f);
+
+  //заполняем на форме поле с буквами
+  for i:=0 to n-1 do
+    for j:=0 to m-1 do
+    begin
+      case now.al[i,j] of
+        1: FormGame.sg.Cells[j,i]:='A';
+        2: FormGame.sg.Cells[j,i]:='B';
+        3: FormGame.sg.Cells[j,i]:='C';
+        4: FormGame.sg.Cells[j,i]:='D';
+        5: FormGame.sg.Cells[j,i]:='E';
+        0: FormGame.sg.Cells[j,i]:='';
+      end;
+    end;
+
+  //открываем тот же файл с авторешением и перезаписываем фигуры на буквы
+
+  Assign(fin,'data\input.txt');
+  Rewrite(fin);
+  Writeln(fin,n,' ',m);
+
+  for i:=0 to n-1 do
+  begin
+    for j:=0 to m-1 do
+      write(fin,mat.al[i,j],' ');
+    Writeln(fin);
+  end;
+
+  Close(fin);
+end;
+
+//------------------------------------------------------------------------------
+// ПРОВЕРКА НА ФИГУРУ
+//------------------------------------------------------------------------------
+function CheckFig(mas:TMas; i,j,k,inf:integer):Boolean;
+begin
+  CheckFig:=False;
+
+  //не выходит ли за левую границу?
+  if j+fig[k].jmin>-1 then
+    //не выходит ли за правую границу?
+    if j+fig[k].jmax<m then
+      //не выходит ли за нижнюю границу?
+      if i+fig[k].imax<n then
+        //принимает ли значение главная клеточка?
+        if mas[i,j]=inf then
+          //принимает ли значение вторая клеточка?
+          if mas[i+fig[k].i1,j+fig[k].j1]=inf then
+            //принимает ли значение третья клеточка?
+            if mas[i+fig[k].i2,j+fig[k].j2]=inf then
+              //принимает ли значение четвертая клеточка?
+              if mas[i+fig[k].i3,j+fig[k].j3]=inf then
+                //фигура может быть вставлена
+                Checkfig:=True;
+end;
+
+//------------------------------------------------------------------------------
+// ПРОВЕРКА НА БУКВУ
+//------------------------------------------------------------------------------
+function CheckLet(mat:TMat; i,j,k:integer):Byte;
+var
+  let,count:Integer;
+begin
+  checklet:=0;
+
+  let:=0;
+  count:=0;
+
+  //есть ли буква в главной клеточке?
+  if mat.al[i,j]<>0 then
+  begin
+    Inc(count);
+    let:=mat.al[i,j];
+  end;
+
+  //есть ли буква во второй клеточке?
+  if mat.al[i+fig[k].i1,j+fig[k].j1]<>0 then
+  begin
+    Inc(count);
+    let:=mat.al[i+fig[k].i1,j+fig[k].j1];
+  end;
+
+  //есть ли буква в третьей клеточке?
+  if mat.al[i+fig[k].i2,j+fig[k].j2]<>0 then
+  begin
+    Inc(count);
+    let:=mat.al[i+fig[k].i2,j+fig[k].j2];
+  end;
+
+  //есть ли буква в четвертой клеточке?
+  if mat.al[i+fig[k].i3,j+fig[k].j3]<>0 then
+  begin
+    Inc(count);
+    let:=mat.al[i+fig[k].i3,j+fig[k].j3];
+  end;
+
+  //только одна буква на фигуре?
+  if count=1 then
+    //не занята ли эта буква уже другим типом фигуры?
+    if ((mat.t[fig[k].t-1].inf=let) and (mat.l[let-1].inf=fig[k].t)) or
+     //или не занят ли этот тип фигуры другой буквой?
+     ((mat.t[fig[k].t-1].count=0) and (mat.l[let-1].count=0)) then
+      //фигура может быть вставлена
+      checklet:=let;
+end;
+
+//------------------------------------------------------------------------------
+// ДОБАВЛЕНИЕ/УДАЛЕНИЕ ФИГУРЫ
+//------------------------------------------------------------------------------
+procedure NewFig(var mat:TMat; i,j,k:integer; set_reset:Boolean);
+// set_reset: true-добавить, false-удалить
+var
+  val,c:Integer;
+begin
+  if set_reset then
+  begin
+    //заполнить данные о добавленной фигуре
+    inc(mat.fcount);
+    Inc(mat.t[fig[k].t-1].count);
+    c:=mat.fcount;
+    SetLength(mat.f,c);
+    mat.f[c-1].k:=k+1;
+    mat.f[c-1].i:=i;
+    mat.f[c-1].j:=j;
+
+    //отметить клеточки фигуры на поле порядковым для нее номером
+    val:=c;
+  end
+  else
+  begin
+    //стереть данные о удаленной фигуре
+    Dec(mat.fcount);
+    c:=mat.fcount;
+    SetLength(mat.f,c);
+    Dec(mat.t[fig[k].t-1].count);
+
+    //отметить клеточки фигуры на поле "0"
+    val:=0;
+  end;
+
+  //заполнить нужным значением клеточки фигуры на поле
+  mat.af[i,j]:=val;
+  mat.af[i+fig[k].i1,j+fig[k].j1]:=val;
+  mat.af[i+fig[k].i2,j+fig[k].j2]:=val;
+  mat.af[i+fig[k].i3,j+fig[k].j3]:=val;
+
+  //отобразить изменения на форме
+  FormGame.sg.Cells[j,i]:=FormGame.sg.Cells[j,i];
+  FormGame.sg.Cells[j+fig[k].j1,i+fig[k].i1]:=FormGame.sg.Cells[j+fig[k].j1,i+fig[k].i1];
+  FormGame.sg.Cells[j+fig[k].j2,i+fig[k].i2]:=FormGame.sg.Cells[j+fig[k].j2,i+fig[k].i2];
+  FormGame.sg.Cells[j+fig[k].j3,i+fig[k].i3]:=FormGame.sg.Cells[j+fig[k].j3,i+fig[k].i3];
+end;
+
+//------------------------------------------------------------------------------
+// ДОБАВЛЕНИЕ/УДАЛЕНИЕ БУКВЫ
+//------------------------------------------------------------------------------
+procedure NewLet(var mat:TMat; k,let:integer; set_reset:Boolean);
+// set_reset: true-добавить, false-удалить
+begin
+  if set_reset then
+  begin
+    //заполнить данные о добавленной букве
+    Inc(mat.l[let-1].count);
+    mat.l[let-1].inf:=fig[k].t;
+    mat.t[fig[k].t-1].inf:=let;
+    mat.f[mat.fcount-1].l:=let;
+  end
+  else
+  begin
+    //стереть данные о удаленной фигуре
+    Dec(mat.l[let-1].count);
+  end;
+end;
+
+//------------------------------------------------------------------------------
+// ВЫВЕСТИ РЕЗУЛЬТАТ
+//------------------------------------------------------------------------------
+procedure OutRes(mat:TMat; var rcount:integer; var fstop:Boolean);
+var
+  s:string;
+  i,j:Byte;
+  f: file of TMatFig;
+  fout: Text;
+begin
+  if fLet then
+  begin
+    //для результата
+    s:='results\'+inttostr(rcount);
+    Inc(rcount);
+  end
+  else
+  begin
+    //для условия
+    s:='data\input';
+    //остановить поиск
+    fStop:=True;
+  end;
+
+  //открыть файл для записи
+  Assign(fout,s+'.txt');
+  rewrite(fout);
+
+  //записать игровое поле с фигурками
+  for i:=0 to n-1 do
+  begin
+    for j:=0 to m-1 do
+      write(fout,mat.af[i,j],' ');
+    writeln(fout);
+  end;
+
+  //записать буквы для типов и типы для букв
+  for i:=0 to 4 do
+  begin
+    write(fout,now.t[i].inf,' ');
+    write(fout,now.t[i].count,' ');
+    write(fout,now.l[i].inf,' ');
+    write(fout,now.l[i].count,' ');
+  end;
+
+  //закрыть файл
+  close(fout);
+
+  //открыть типизированный файл для записи
+  assign(f,s+'.dat');
+  rewrite(f);
+
+  //записать все фигуры на поле
+  for i:=0 to mat.fcount-1 do
+    write(f,mat.f[i]);
+
+  //закрыть файл
+  close(f);
+end;
+
+//------------------------------------------------------------------------------
+// АВТОРЕШЕНИЕ
+//------------------------------------------------------------------------------
+procedure GetRes(var mat:TMat; i,j:Byte);
+var
+  k,p,let,lf,fl:Byte;
+  per: TPer;
+begin
+  if i<n then
+    if j<m then
+      //если клетка не занята другой фигурой
+      if mat.af[i,j]=0 then
+      begin
+        //готовим перестановку с номерами фигур
+        iniPer(per);
+        for p:=0 to 18 do
+        begin
+          k:=per[p];
+          //пробуем k-ую фигуру
+          if (CheckFig(mat.af,i,j,k,0)) and (not fStop) then
+          begin
+            //действия, когда флаг проверки на букву активен (авторешение)
+            if fLet then
+            begin
+              let:=CheckLet(mat,i,j,k);
+              if let<>0 then
+              //проверку прошла
+              begin
+                NewFig(mat,i,j,k,True);
+                NewLet(mat,k,let,True);
+              end
+              //не прошла, значит пробуем следующую
+              else
+                Continue;
+            end
+            //иначе просто вставляем фигурку
+            else
+              NewFig(mat,i,j,k,True);
+
+            //заполнено ли поле фигурками полностью?
+            if mat.fcount=(n*m div 4) then
+              //выводим результат
+              OutRes(mat,rcount,fStop)
+            else
+              //пробуем заполнить следующую пустую клеточку
+              GetRes(mat,i,j+1);
+
+            //вернувшись из рекурсии очищаем поле от фигурок/букв
+
+            if fLet then
+              NewLet(mat,k,let,False);
+
+            NewFig(mat,i,j,k,False);
+
+            //пробуем другие варианты
+          end;
+        end;
+      end
+      //переходим на столбец правее
+      else
+        GetRes(mat,i,j+1)
+    //переходим на строчку ниже
+    else
+      GetRes(mat,i+1,0);
+end;
+
+//------------------------------------------------------------------------------
+// ЗАГРУЗИТЬ РЕЗУЛЬТАТ
+//------------------------------------------------------------------------------
+procedure LoadRes(var mat:TMat; var rnow:integer);
+var
+  i,j:Integer;
+  s:string;
+  fin:text;
+  f:file of TMatFig;
+begin
+  if rcount=0 then
+  begin
+    ShowMessage('Ответов не найдено ;С');
+    Exit;
+  end;
+
+  //если показатель текущего отображаемого результата больше их количества,
+  //то возвращаемся к первому результату и идем по кругу
+  if rnow>rcount then rnow:=1;
+
+  s:='results\'+inttostr(rnow);
+  Inc(rnow);
+
+  now.fcount:=n*m div 4;
+  SetLength(now.f, now.fcount);
+
+  //чтение из типизированного файла всех фигурок с поля
+  assign(f,s+'.dat');
+  reset(f);
+  for i:=0 to now.fcount-1 do
+    read(f,now.f[i]);
+  close(f);
+
+  //чтение поля с фигурками
+  Assign(fin,s+'.txt');
+  reset(fin);
+  for i:=0 to n-1 do
+    for j:=0 to m-1 do
+    begin
+      read(fin,now.af[i,j]);
+      FormGame.sg.Cells[j,i]:=FormGame.sg.Cells[j,i];
+    end;
+  //чтение типов фигурок с буквами и букв с типами фигурок
+  for i:=0 to 4 do
+  begin
+    read(fin,now.t[i].inf);
+    read(fin,now.t[i].count);
+    read(fin,now.l[i].inf);
+    read(fin,now.l[i].count);
+  end;
+  close(fin);
+end;
+
+//------------------------------------------------------------------------------
+// ПРОРИСОВКА МАТРИЦЫ ПОЛЯ
+//------------------------------------------------------------------------------
+procedure TFormGame.sgDrawCell(Sender: TObject; ACol, ARow: Integer;
+  Rect: TRect; State: TGridDrawState);
+var
+  i,j,k:Integer;
+begin
+  j:=ACol;
+  i:=ARow;
+
+  with sg do
+    with Canvas do
+    begin
+      //клеточка с фигурой
+      if now.af[i,j]>0 then
+      begin
+        k:=now.f[now.af[i,j]-1].k-1;
+
+        //в зависимости от типа выбирается цвет
+        case fig[k].t of
+          1: Brush.Color:=clYellow;
+          2: Brush.Color:=clAqua;
+          3: Brush.Color:=clRed;
+          4: Brush.Color:=clLime;
+          5: Brush.Color:=clPurple;
+        end;
+
+        FillRect(Rect);
+        TextOut(Rect.Left+2, Rect.Top+2, cells[j,i]);
+
+        //установка цвета и карандаша для прорисовки границ фигурок
+        with pen do
+        begin
+          Color:=clblack;
+          width:=3;
+        end;
+
+        if i<>0 then
+          //если сверху другая фигура
+          if now.af[i,j]<>now.af[i-1,j] then
+          begin
+            moveto(Rect.Left,Rect.Top);
+            LineTo(Rect.Right,Rect.Top);
+          end;
+
+        if i<>n-1 then
+          //если снизу другая фигура
+          if now.af[i,j]<>now.af[i+1,j] then
+          begin
+            moveto(Rect.Left,Rect.Bottom);
+            LineTo(Rect.Right,Rect.Bottom);
+          end;
+
+        if j<>0 then
+          //если слева другая фигура
+          if now.af[i,j]<>now.af[i,j-1] then
+          begin
+            moveto(Rect.Left,Rect.Top);
+            LineTo(Rect.Left,Rect.Bottom);
+          end;
+
+        if j<>n-1 then
+          //если справа другая фигура
+          if now.af[i,j]<>now.af[i,j+1] then
+          begin
+            moveto(Rect.Right,Rect.Top);
+            LineTo(Rect.Right,Rect.Bottom);
+          end;
+      end
+      else
+        //пустая клеточка, но кликнутая
+        if cl.a[i,j]=1 then
+        begin
+          //закрасить серым
+          Brush.Color:=clGray;
+          FillRect(Rect);
+          TextOut(Rect.Left+2, Rect.Top+2, cells[j,i]);
+        end;
+    end;
+end;
+
+//------------------------------------------------------------------------------
+// КЛИК ПО ПОЛЮ
+//------------------------------------------------------------------------------
+procedure TFormGame.sgClick(Sender: TObject);
+var
+  i,j,k,ii,jj,x,l,let,inf:Integer;
+begin
+  i:=sg.Row;
+  j:=sg.Col;
+  inf:=now.af[i,j];
+
+  //пуста ли клеточка?
+  if inf=0 then
+  begin
+    //не была ли эта клеточка кликнута раньше?
+    if cl.a[i,j]=0 then
+    begin
+      cl.a[i,j]:=1;
+      sg.Cells[j,i]:=sg.Cells[j,i];
+      Inc(cl.count);
+
+      cl.i[cl.count-1]:=i;
+      cl.j[cl.count-1]:=j;
+
+      //если клик 4-ый и заключительный
+      if cl.count=4 then
+      begin
+        ii:=cl.i[0];
+        jj:=cl.j[0];
+
+        //определение главной клеточки в полученной фигурке
+        for x:=1 to 3 do
+          if (cl.i[x]<ii) or ((cl.i[x]=ii) and (cl.j[x]<jj)) then
+          begin
+            ii:=cl.i[x];
+            jj:=cl.j[x];
+          end;
+
+        //пробуем вставить кажду фигурку, как в авторшении
+        for k:=0 to 18 do
+          //теперь, в клеточках должна быть "1", а за поле берем кликовое
+          if CheckFig(cl.a,ii,jj,k,1) then
+            begin
+              //проверка буквы
+              let:=CheckLet(now,ii,jj,k);
+              if let<>0 then
+                begin
+                  NewFig(now,ii,jj,k,True);
+                  NewLet(now,k,let,True);
+                  if now.fcount=n*m div 4 then
+                    ShowMessage('Победа!!!');
+                  Break;
+                end;
+            end;
+
+        //онуляем клики
+        IniClick(cl);
+      end;
+    end;  
+  end
+  //клеточка занята фигурой, значит удаляем её
+  else
+  begin
+    ii:=now.f[inf-1].i;
+    jj:=now.f[inf-1].j;
+    k:=now.f[inf-1].k-1;
+    l:=now.f[inf-1].l;;
+
+    for i:=inf-1 to now.fcount-2 do
+      now.f[i]:=now.f[i+1];
+
+    for i:=0 to n-1 do
+      for j:=0 to m-1 do
+        if now.af[i,j]>inf then
+          Dec(now.af[i,j]);
+
+    NewLet(now,k,l,False);
+    NewFig(now,ii,jj,k,False);
+  end;
+end;
+
+//------------------------------------------------------------------------------
+// FORM CREATE
+//------------------------------------------------------------------------------
+procedure TFormGame.FormCreate(Sender: TObject);
+begin
+  IniFig(fig);
+  //подготовка условия
+  mniNewGame.Click;
+end;
+
+//------------------------------------------------------------------------------
+// МЕНЮ-ИГРА-НОВАЯ ИГРА
+//------------------------------------------------------------------------------
+procedure TFormGame.mniNewGameClick(Sender: TObject);
+begin
+  rcount:=0;
+  rnow:=1;
+
+  //подготовка поля (res) для авторешения
+  fLet:=False;
+  fStop:=False;
+  IniMat(res,n,m);
+
+  //авторешение без учета букв, только раскладка фигурок по полю
+  GetRes(res,0,0);
+
+  //подготовка поля (now), раксладки букв по готовой раскладке фигурок, кликов
+  fLet:=True;
+  fStop:=False;
+  IniMat(now,n,m);
+  IniRandom(now,n,m);
+  IniClick(cl);
+end;
+
+//------------------------------------------------------------------------------
+// МЕНЮ-ИГРА-ЗАНОВО
+//------------------------------------------------------------------------------
+procedure TFormGame.mniResetClick(Sender: TObject);
+begin
+  rnow:=1;
+  rcount:=0;
+
+  //очистка поля и кликов
+  IniMat(now,n,m);
+  IniClick(cl);
+end;
+
+//------------------------------------------------------------------------------
+// МЕНЮ-ИГРА-АВТОРЕШЕНИЕ
+//------------------------------------------------------------------------------
+procedure TFormGame.mniAutoResClick(Sender: TObject);
+begin
+  //если авторешение еще не высчитывалось
+  if now.fcount < (n*m div 4) then
+  begin
+    rcount:=0;
+    rnow:=1;
+    GetRes(now,0,0);
+  end;
+
+  //загрузка авторешения
+  LoadRes(now,rnow);
+end;
+
+//------------------------------------------------------------------------------
+// МЕНЮ-ИГРА-НАЗАД В МЕНЮ
+//------------------------------------------------------------------------------
+procedure TFormGame.mniBackClick(Sender: TObject);
+begin
+  //спрятать Игровую форму
+  FormGame.Hide;
+  //показать Стартовую форму
+  FormStart.Show;
+end;
+
+//------------------------------------------------------------------------------
+// МЕНЮ-НАСТРОЙКИ-РАЗМЕР
+//------------------------------------------------------------------------------
+procedure TFormGame.mniSizeClick(Sender: TObject);
+begin
+  //скрытие меню, появление кнопки "ОК"
+  FormGame.Menu:=nil;
+  edtN.Visible:=True;
+  edtm.Visible:=True;
+  lblN.Visible:=True;
+  lblM.Visible:=true;
+  btnOkSize.Visible:=True;
+  sg.Visible:=false;
+
+  Width:=210;
+  Height:=140;
+
+  edtn.text:=inttostr(n);
+  edtm.text:=inttostr(m);
+end;
+
+//------------------------------------------------------------------------------
+// МЕНЮ-НАСТРОЙКИ-РАЗМЕР: ОК
+//------------------------------------------------------------------------------
+procedure TFormGame.btnOkSizeClick(Sender: TObject);
+var
+  nn,mm:Integer;
+begin
+  if edtN.Text <> '' then
+    nn:=StrToInt(edtN.text);
+
+  if edtM.Text <> '' then
+    mm:=StrToInt(edtm.text);
+
+  //проверка всех условий
+  if edtN.Text = '' then
+    ShowMessage('Введите N!')
+  else if edtM.Text = '' then
+    ShowMessage('Введите M!')
+  else if nn<=0 then
+    ShowMessage('Строчек (N) должно быть не меньше 2!')
+  else if mm<=0 then
+    ShowMessage('Столбиков (M) должно быть не меньше 2!')
+  else if nn>12 then
+    ShowMessage('Строчек (N) должно быть не больше 12!')
+  else if mm>12 then
+    ShowMessage('Столбиков (M) должно быть не больше 12!')
+  else if nn*mm <> Abs(nn*mm div 4)*4 then
+    ShowMessage('Количество клеточек (N*M) должно быть кратно 4-м!!!')
+  else
+  begin
+    n:=StrToInt(edtN.text);
+    m:=StrToInt(edtM.text);
+  end;
+
+  edtN.Visible:=False;
+  edtm.Visible:=False;
+  lblN.Visible:=False;
+  lblM.Visible:=False;
+  btnOkSize.Visible:=False;
+  sg.Visible:=True;
+
+  FormGame.Menu:=mmBase;
+
+  //подготовка условия для нового размера поля
+  FormGame.mniNewGame.Click;
+end;
+
+//------------------------------------------------------------------------------
+// МЕНЮ-НАСТРОЙКИ-БУКВЫ
+//------------------------------------------------------------------------------
+procedure TFormGame.mniLettersClick(Sender: TObject);
+var
+  i,j:integer;
+begin
+  //скрытие меню, появление кнопки "ОК"
+  FormGame.Menu:=nil;
+  sgin.ColCount:=sg.ColCount;
+  sgin.RowCount:=sg.RowCount;
+
+  //перерисовка букв с поля в таблицу
+  for i:=0 to n-1 do
+    for j:=0 to m-1 do
+      if now.al[i,j]=0 then
+        sgIn.Cells[j,i]:=''
+      else
+        sgIn.Cells[j,i]:=IntToStr(now.al[i,j]);
+
+  sgin.Width:=sg.Width;
+  sgin.Height:=sg.Height;
+
+  btnOkLetter.Visible:=True;
+  btnOkLetter.Width:=sg.Width;
+
+  sgIn.Visible:=true;
+  sg.Visible:=False;
+end;
+
+//------------------------------------------------------------------------------
+// МЕНЮ-НАСТРОЙКИ-БУКВЫ: ВВОД ОТ 1 ДО 5
+//------------------------------------------------------------------------------
+procedure TFormGame.sgInKeyPress(Sender: TObject; var Key: Char);
+begin
+  //запрет на ввод символов кроме [1,2,3,4,5]
+  If not (Key in ['1'..'5', #8]) then
+    Key:=#0;
+end;
+
+//------------------------------------------------------------------------------
+// МЕНЮ-НАСТРОЙКИ-БУКВЫ: ВВОД НЕ БОЛЬШЕ 1-ОЙ ЦИФРЫ
+//------------------------------------------------------------------------------
+procedure TFormGame.sgInSetEditText(Sender: TObject; ACol, ARow: Integer;
+  const Value: String);
+begin
+  //запрет на ввод больше чем одной цифры
+  if Value<>'' then
+    if StrToInt(sgIn.Cells[ACol,ARow])>5 then
+      sgin.Cells[ACol,ARow]:=Value[1];
+end;
+
+//------------------------------------------------------------------------------
+// МЕНЮ-НАСТРОЙКИ-БУКВЫ: ОК
+//------------------------------------------------------------------------------
+procedure TFormGame.btnOkLetterClick(Sender: TObject);
+var
+  i,j:Integer;
+  f:textfile;
+begin
+  lcount:=0;
+
+  //подчсет букв в поле
+  for i:=0 to n-1 do
+    for j:=0 to m-1 do
+    begin
+      if sgin.Cells[j,i] <> '' then
+        inc(lcount);
+    end;
+
+  //проверка на соответствия кол-ва насчитанных букв с должным
+  if lcount=n*m div 4 then
+  begin
+    //заполнение поля
+    for i:=0 to n-1 do
+      for j:=0 to m-1 do
+      begin
+        if sgin.cells[j,i]<>'' then
+          now.al[i,j]:=StrToInt(sgin.cells[j,i])
+        else
+          now.al[i,j]:=0;
+
+        case now.al[i,j] of
+          1: FormGame.sg.Cells[j,i]:='A';
+          2: FormGame.sg.Cells[j,i]:='B';
+          3: FormGame.sg.Cells[j,i]:='C';
+          4: FormGame.sg.Cells[j,i]:='D';
+          5: FormGame.sg.Cells[j,i]:='E';
+          0: FormGame.sg.Cells[j,i]:='';
+        end;
+      end;
+    Application.ProcessMessages;
+  end
+  else
+    ShowMessage('Количество букв должно быть равно количеству фигур! (N*M/4)');
+
+  FormGame.Menu:=mmBase;
+  sgIn.Visible:=False;
+  sg.Visible:=True;
+  btnOkLetter.Visible:=False;
+  IniMat(now,n,m);
+end;
+
+procedure TFormGame.NHeplClick(Sender: TObject);
+begin
+  formhelp.visible:=true;
+end;
+
+end.
